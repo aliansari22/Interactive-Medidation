@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Persistent Interactive Particle Field</title>
+    <!-- p5.js Library from a CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            color: #f0f0f0;
+        }
+
+        #controls-container {
+            position: fixed;
+            top: 15px;
+            left: 15px;
+            background-color: rgba(20, 20, 30, 0.75);
+            backdrop-filter: blur(8px);
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+            max-width: 320px;
+            z-index: 100;
+            transition: transform 0.5s cubic-bezier(0.25, 1, 0.5, 1);
+            transform: translateX(0);
+        }
+        
+        #controls-container.hidden {
+            transform: translateX(-110%);
+        }
+
+        .control-group { margin-bottom: 16px; }
+        .control-group label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .control-group input[type="range"] { width: 100%; cursor: pointer; }
+        .control-group span {
+            font-size: 12px;
+            color: #ccc;
+            background-color: rgba(0,0,0,0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .button-row { display: flex; gap: 10px; }
+        .ui-btn {
+            flex-grow: 1;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #4a4e69;
+            color: #f0f0f0;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+        .ui-btn:hover { background-color: #6a6e99; }
+        #reset-btn { background-color: #9a4e69; }
+        #reset-btn:hover { background-color: #b96e89; }
+    </style>
+</head>
+<body>
+
+    <!-- UI Panel for Customization -->
+    <div id="controls-container">
+        <!-- Sliders remain the same -->
+        <div class="control-group"><label for="numParticlesSlider">Particle Count <span id="numParticlesValue"></span></label><input type="range" id="numParticlesSlider" min="100" max="5000" step="50"></div>
+        <div class="control-group"><label for="particleSizeSlider">Particle Size <span id="particleSizeValue"></span></label><input type="range" id="particleSizeSlider" min="2" max="30" step="1"></div>
+        <div class="control-group"><label for="fadeSlider">Background Fade <span id="fadeValue"></span></label><input type="range" id="fadeSlider" min="1" max="50" step="1"></div>
+        <div class="control-group"><label for="driftSlider">Ambient Drift <span id="driftValue"></span></label><input type="range" id="driftSlider" min="0" max="0.3" step="0.01"></div>
+        <div class="control-group"><label for="frictionSlider">Friction <span id="frictionValue"></span></label><input type="range" id="frictionSlider" min="0.90" max="0.999" step="0.001"></div>
+        <div class="control-group"><label for="repelRadiusSlider">Repel Radius <span id="repelRadiusValue"></span></label><input type="range" id="repelRadiusSlider" min="50" max="250" step="5"></div>
+        <div class="control-group"><label for="repelStrengthSlider">Repel Strength <span id="repelStrengthValue"></span></label><input type="range" id="repelStrengthSlider" min="0.5" max="8" step="0.1"></div>
+        <div class="control-group"><label for="attractRadiusSlider">Attract Radius <span id="attractRadiusValue"></span></label><input type="range" id="attractRadiusSlider" min="100" max="400" step="10"></div>
+        <div class="control-group"><label for="explosionChanceSlider">Explosion Chance <span id="explosionChanceValue"></span></label><input type="range" id="explosionChanceSlider" min="0" max="100" step="1"></div>
+        
+        <div class="button-row">
+            <button id="toggle-ui-btn" class="ui-btn">Toggle UI</button>
+            <button id="reset-btn" class="ui-btn">Reset</button>
+        </div>
+    </div>
+
+    <script>
+    const CONFIG_STORAGE_KEY = 'particleFieldConfig';
+
+    // Default configuration. This will be overwritten by loaded settings.
+    let config = {
+        numParticles: 1000,
+        maxParticleSize: 18,
+        backgroundAlpha: 12,
+        ambientDrift: 0.08,
+        particleFriction: 0.98,
+        repulsionRadius: 120,
+        repulsionStrength: 2,
+        attractionRadius: 200,
+        explosionChance: 0.4,
+    };
+    
+    // --- Data-Oriented Structure & State ---
+    let posX = [], posY = [], velX = [], velY = [], baseR = [], r = [], hue = [], sat = [], bri = [];
+    let explosionParticles = [];
+    let controlsContainer;
+
+    // --- Core Save/Load Functions ---
+
+    function saveConfig() {
+        // localStorage can only store strings, so we convert the object to a JSON string.
+        localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
+    }
+
+    function loadConfig() {
+        const savedConfigJSON = localStorage.getItem(CONFIG_STORAGE_KEY);
+        if (savedConfigJSON) {
+            try {
+                const savedConfig = JSON.parse(savedConfigJSON);
+                // Merge saved settings over the defaults. This prevents errors if we add a new
+                // setting in the future that isn't in the user's saved data.
+                config = { ...config, ...savedConfig };
+            } catch (e) {
+                console.error("Error parsing saved config:", e);
+                // If parsing fails, stick with defaults.
+            }
+        }
+    }
+    
+    function initializeParticles() {
+      posX = [], posY = [], velX = [], velY = [], baseR = [], r = [], hue = [], sat = [], bri = [];
+      for (let i = 0; i < config.numParticles; i++) {
+        posX[i] = random(width); posY[i] = random(height);
+        const angle = random(TWO_PI);
+        const speed = random(0.2, 0.6);
+        velX[i] = cos(angle) * speed; velY[i] = sin(angle) * speed;
+        baseR[i] = random(config.maxParticleSize * 0.4, config.maxParticleSize);
+        r[i] = baseR[i]; hue[i] = random(360); sat[i] = random(60, 100); bri[i] = random(80, 100);
+      }
+    }
+
+    function setup() {
+      createCanvas(windowWidth, windowHeight);
+      colorMode(HSB, 360, 100, 100, 100);
+      noStroke();
+      
+      // *** LOAD settings at the very beginning ***
+      loadConfig();
+      
+      controlsContainer = document.getElementById('controls-container');
+      setupControls();
+      initializeParticles();
+      
+      window.addEventListener('keydown', (e) => {
+          if (e.shiftKey && e.ctrlKey && (e.key === 'R' || e.key === 'r')) {
+              e.preventDefault();
+              controlsContainer.classList.remove('hidden');
+          }
+      });
+    }
+
+    function setupControls() {
+        const createSlider = (id, configKey, displayFn) => {
+            const slider = document.getElementById(id + 'Slider');
+            const valueSpan = document.getElementById(id + 'Value');
+            
+            // This now uses the loaded config to set the initial slider position
+            slider.value = (configKey === 'explosionChance') ? config[configKey] * 100 : config[configKey];
+            
+            const update = () => {
+                let value = parseFloat(slider.value);
+                if (configKey === 'explosionChance') {
+                    config[configKey] = value / 100.0;
+                } else {
+                    config[configKey] = value;
+                }
+                
+                valueSpan.textContent = displayFn ? displayFn(value) : value;
+                
+                // *** SAVE settings whenever a value is updated ***
+                saveConfig(); 
+            };
+            
+            slider.addEventListener('input', update);
+            update(); // Call once to set initial text
+        };
+
+        createSlider('numParticles', 'numParticles');
+        document.getElementById('numParticlesSlider').addEventListener('change', () => initializeParticles());
+
+        createSlider('particleSize', 'maxParticleSize');
+        document.getElementById('particleSizeSlider').addEventListener('change', () => initializeParticles());
+
+        createSlider('fade', 'backgroundAlpha');
+        createSlider('drift', 'ambientDrift', v => v.toFixed(2));
+        createSlider('friction', 'particleFriction', v => v.toFixed(3));
+        createSlider('repelRadius', 'repulsionRadius');
+        createSlider('repelStrength', 'repulsionStrength', v => v.toFixed(1));
+        createSlider('attractRadius', 'attractionRadius');
+        createSlider('explosionChance', 'explosionChance', v => `${v}%`);
+        
+        document.getElementById('toggle-ui-btn').addEventListener('click', () => {
+            controlsContainer.classList.toggle('hidden');
+        });
+
+        // Setup the new Reset button
+        document.getElementById('reset-btn').addEventListener('click', () => {
+            if (confirm("Are you sure you want to reset all settings to their defaults?")) {
+                localStorage.removeItem(CONFIG_STORAGE_KEY);
+                location.reload(); // The easiest way to apply the defaults everywhere
+            }
+        });
+    }
+
+    // All other functions (windowResized, draw, explode, ExplosionParticle class)
+    // remain the same as the previous version.
+
+    function windowResized() {
+        resizeCanvas(windowWidth, windowHeight);
+        initializeParticles();
+    }
+
+    function draw() {
+      background(230, 20, 20, config.backgroundAlpha);
+      const isInteracting = mouseIsPressed || touches.length > 0;
+
+      for (let i = 0; i < config.numParticles; i++) {
+        posX[i] += velX[i]; posY[i] += velY[i];
+        if (posX[i] < 0) posX[i] += width; if (posX[i] > width) posX[i] -= width;
+        if (posY[i] < 0) posY[i] += height; if (posY[i] > height) posY[i] -= height;
+        r[i] += (baseR[i] - r[i]) * 0.1;
+
+        if (isInteracting) {
+          const d = dist(posX[i], posY[i], mouseX, mouseY);
+          if (d < config.repulsionRadius) {
+            let dirX = posX[i] - mouseX, dirY = posY[i] - mouseY;
+            const mag = sqrt(dirX * dirX + dirY * dirY);
+            if (mag > 0) { dirX /= mag; dirY /= mag; }
+            const str = map(d, 0, config.repulsionRadius, config.repulsionStrength, 0.1);
+            velX[i] += dirX * str; velY[i] += dirY * str;
+            const velMag = sqrt(velX[i]*velX[i] + velY[i]*velY[i]);
+            if (velMag > 4) { velX[i]=(velX[i]/velMag)*4; velY[i]=(velY[i]/velMag)*4; }
+            if (d < r[i] + 8 && random() < config.explosionChance) {
+              explode(posX[i], posY[i], hue[i]); r[i] = baseR[i]*3;
+              const angle = random(TWO_PI); velX[i]+=cos(angle)*1.5; velY[i]+=sin(angle)*1.5;
+            }
+          } else if (d < config.attractionRadius) {
+            let dirX = mouseX - posX[i], dirY = mouseY - posY[i];
+            const mag = sqrt(dirX * dirX + dirY * dirY);
+            if (mag > 0) { dirX /= mag; dirY /= mag; }
+            velX[i] += dirX * 0.12; velY[i] += dirY * 0.12;
+            const velMag = sqrt(velX[i]*velX[i] + velY[i]*velY[i]);
+            if (velMag > 2.5) { velX[i]=(velX[i]/velMag)*2.5; velY[i]=(velY[i]/velMag)*2.5; }
+          }
+        }
+        
+        const angle = random(TWO_PI);
+        velX[i] += cos(angle) * config.ambientDrift; velY[i] += sin(angle) * config.ambientDrift;
+        velX[i] *= config.particleFriction; velY[i] *= config.particleFriction;
+
+        fill(hue[i], sat[i], bri[i], 7);
+        for (let k = 5; k >= 2; k--) { ellipse(posX[i], posY[i], r[i] * k); }
+        fill(hue[i], sat[i], bri[i], 85);
+        ellipse(posX[i], posY[i], r[i] * 2);
+      }
+
+      for (let i = explosionParticles.length - 1; i >= 0; i--) {
+        explosionParticles[i].update(); explosionParticles[i].display();
+        if (explosionParticles[i].life <= 0) explosionParticles.splice(i, 1);
+      }
+    }
+
+    function explode(x,y,h){let c=int(random(14,23));for(let i=0;i<c;i++){let a=map(i,0,c,0,TWO_PI)+random(-.2,.2),s=random(2.8,5),hu=(h+random(-36,36)+360)%360;explosionParticles.push(new ExplosionParticle(x,y,s*cos(a),s*sin(a),hu))}}
+    class ExplosionParticle{constructor(x,y,dx,dy,h){this.pos=createVector(x,y);this.vel=createVector(dx,dy).add(p5.Vector.random2D().mult(0.5));this.r=random(5,11);this.hue=h;this.sat=random(75,100);this.bri=random(90,100);this.life=35+random(7,22)}update(){this.pos.add(this.vel);this.vel.mult(0.94);this.life-=1;this.r*=.95}display(){fill(this.hue,this.sat,this.bri,map(this.life,0,55,0,90));ellipse(this.pos.x,this.pos.y,max(0,this.r*2))}}
+    </script>
+</body>
+</html>
