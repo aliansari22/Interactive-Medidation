@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Persistent Interactive Particle Field</title>
+    <!-- p5.js Library from a CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            color: #f0f0f0;
+        }
+
+        #controls-container {
+            position: fixed;
+            top: 15px;
+            left: 15px;
+            background-color: rgba(20, 20, 30, 0.75);
+            backdrop-filter: blur(8px);
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+            max-width: 320px;
+            z-index: 100;
+            transition: transform 0.5s cubic-bezier(0.25, 1, 0.5, 1);
+            transform: translateX(0);
+        }
+
+        #controls-container.hidden {
+            transform: translateX(-110%);
+        }
+
+        .control-group { margin-bottom: 16px; }
+        .control-group label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .control-group input[type="range"] { width: 100%; cursor: pointer; }
+        .control-group span {
+            font-size: 12px;
+            color: #ccc;
+            background-color: rgba(0,0,0,0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .button-row { display: flex; gap: 10px; }
+        .ui-btn {
+            flex-grow: 1;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #4a4e69;
+            color: #f0f0f0;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+        .ui-btn:hover { background-color: #6a6e99; }
+        #reset-btn { background-color: #9a4e69; }
+        #reset-btn:hover { background-color: #b96e89; }
+    </style>
+</head>
+<body>
+
+    <!-- UI Panel for Customization -->
+    <div id="controls-container">
+        <!-- Sliders remain the same -->
+        <div class="control-group"><label for="numParticlesSlider">Particle Count <span id="numParticlesValue"></span></label><input type="range" id="numParticlesSlider" min="20" max="600" step="5"></div>
+        <div class="control-group"><label for="particleSizeSlider">Particle Size <span id="particleSizeValue"></span></label><input type="range" id="particleSizeSlider" min="2" max="30" step="1"></div>
+        <div class="control-group"><label for="fadeSlider">Background Fade <span id="fadeValue"></span></label><input type="range" id="fadeSlider" min="1" max="50" step="1"></div>
+        <div class="control-group"><label for="driftSlider">Ambient Drift <span id="driftValue"></span></label><input type="range" id="driftSlider" min="0" max="0.3" step="0.01"></div>
+        <div class="control-group"><label for="frictionSlider">Friction <span id="frictionValue"></span></label><input type="range" id="frictionSlider" min="0.90" max="0.999" step="0.001"></div>
+        <div class="control-group"><label for="repelRadiusSlider">Repel Radius <span id="repelRadiusValue"></span></label><input type="range" id="repelRadiusSlider" min="50" max="250" step="5"></div>
+        <div class="control-group"><label for="repelStrengthSlider">Repel Strength <span id="repelStrengthValue"></span></label><input type="range" id="repelStrengthSlider" min="0.5" max="8" step="0.1"></div>
+        <div class="control-group"><label for="attractRadiusSlider">Attract Radius <span id="attractRadiusValue"></span></label><input type="range" id="attractRadiusSlider" min="100" max="400" step="10"></div>
+        <div class="control-group"><label for="explosionChanceSlider">Explosion Chance <span id="explosionChanceValue"></span></label><input type="range" id="explosionChanceSlider" min="0" max="100" step="1"></div>
+
+        <div class="button-row">
+            <button id="toggle-ui-btn" class="ui-btn">Toggle UI</button>
+            <button id="reset-btn" class="ui-btn">Reset</button>
+        </div>
+    </div>
+
+    <script>
+    const CONFIG_STORAGE_KEY = 'particleFieldConfig';
+
+    // Default configuration. This will be overwritten by loaded settings.
+    let config = {
+        numParticles: 1000,
+        maxParticleSize: 18,
+        backgroundAlpha: 12,
+        ambientDrift: 0.08,
+        particleFriction: 0.98,
+        repulsionRadius: 120,
+        repulsionStrength: 2,
+        attractionRadius: 200,
+        explosionChance: 0.4,
+    };
+
+    // --- Data-Oriented Structure & State ---
+    let posX = [], posY = [], velX = [], velY = [], baseR = [], r = [], hue = [], sat = [], bri = [];
+    let explosionParticles = [];
+    let controlsContainer;
+
+    // --- NEW: Audio files for different dominant RGB color explosions ---
+    // Make sure these files (explosion_red.mp3, explosion_green.mp3, explosion_blue.mp3)
+    // are located in the same directory as this HTML file.
+    const EXPLOSION_SOUND_RED = 'explosion_red.mp3';
+    const EXPLOSION_SOUND_GREEN = 'explosion_green.mp3';
+    const EXPLOSION_SOUND_BLUE = 'explosion_blue.mp3';
+
+    // A list of all sound paths, used for initial audio context unlock
+    const ALL_EXPLOSION_SOUND_PATHS = [
+        EXPLOSION_SOUND_RED,
+        EXPLOSION_SOUND_GREEN,
+        EXPLOSION_SOUND_BLUE
+    ];
+
+    let audioInitialized = false;     // Flag to track if user interaction has enabled audio
+    let currentPlayingAudio = null; // Reference to the currently playing Audio object
+
+    // --- Core Save/Load Functions ---
+
+    function saveConfig() {
+        localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
+    }
+
+    function loadConfig() {
+        const savedConfigJSON = localStorage.getItem(CONFIG_STORAGE_KEY);
+        if (savedConfigJSON) {
+            try {
+                const savedConfig = JSON.parse(savedConfigJSON);
+                config = { ...config, ...savedConfig };
+            } catch (e) {
+                console.error("Error parsing saved config:", e);
+            }
+        }
+    }
+
+    function initializeParticles() {
+      posX = [], posY = [], velX = [], velY = [], baseR = [], r = [], hue = [], sat = [], bri = [];
+      for (let i = 0; i < config.numParticles; i++) {
+        posX[i] = random(width); posY[i] = random(height);
+        const angle = random(TWO_PI);
+        const speed = random(0.2, 0.6);
+        velX[i] = cos(angle) * speed; velY[i] = sin(angle) * speed;
+        baseR[i] = random(config.maxParticleSize * 0.4, config.maxParticleSize);
+        hue[i] = random(360); // Hue is 0-360
+        sat[i] = random(60, 100);
+        bri[i] = random(80, 100);
+        r[i] = baseR[i];
+      }
+    }
+
+    function setup() {
+      createCanvas(windowWidth, windowHeight);
+      colorMode(HSB, 360, 100, 100, 100); // Set color mode to HSB
+      noStroke();
+
+      loadConfig();
+
+      controlsContainer = document.getElementById('controls-container');
+      setupControls();
+      initializeParticles();
+
+      window.addEventListener('keydown', (e) => {
+          if (e.shiftKey && e.ctrlKey && (e.key === 'R' || e.key === 'r')) {
+              e.preventDefault();
+              controlsContainer.classList.remove('hidden');
+          }
+      });
+    }
+
+    function setupControls() {
+        const createSlider = (id, configKey, displayFn) => {
+            const slider = document.getElementById(id + 'Slider');
+            const valueSpan = document.getElementById(id + 'Value');
+
+            slider.value = (configKey === 'explosionChance') ? config[configKey] * 100 : config[configKey];
+
+            const update = () => {
+                let value = parseFloat(slider.value);
+                if (configKey === 'explosionChance') {
+                    config[configKey] = value / 100.0;
+                } else {
+                    config[configKey] = value;
+                }
+
+                valueSpan.textContent = displayFn ? displayFn(value) : value;
+                saveConfig();
+            };
+
+            slider.addEventListener('input', update);
+            update();
+        };
+
+        createSlider('numParticles', 'numParticles');
+        document.getElementById('numParticlesSlider').addEventListener('change', () => initializeParticles());
+
+        createSlider('particleSize', 'maxParticleSize');
+        document.getElementById('particleSizeSlider').addEventListener('change', () => initializeParticles());
+
+        createSlider('fade', 'backgroundAlpha');
+        createSlider('drift', 'ambientDrift', v => v.toFixed(2));
+        createSlider('friction', 'particleFriction', v => v.toFixed(3));
+        createSlider('repelRadius', 'repulsionRadius');
+        createSlider('repelStrength', 'repulsionStrength', v => v.toFixed(1));
+        createSlider('attractRadius', 'attractionRadius');
+        createSlider('explosionChance', 'explosionChance', v => `${v}%`);
+
+        document.getElementById('toggle-ui-btn').addEventListener('click', () => {
+            controlsContainer.classList.toggle('hidden');
+            audioInitialized = true; // User interaction enables audio
+        });
+
+        document.getElementById('reset-btn').addEventListener('click', () => {
+            if (confirm("Are you sure you want to reset all settings to their defaults?")) {
+                localStorage.removeItem(CONFIG_STORAGE_KEY);
+                location.reload();
+            }
+            audioInitialized = true; // User interaction enables audio
+        });
+    }
+
+    // --- Handle initial user interaction for audio playback ---
+    // Browsers require a user gesture (click, keydown, touch) before allowing
+    // audio to play. This function ensures the audio context is active.
+    function mousePressed() {
+        if (!audioInitialized) {
+            // Attempt to play a sound to 'unlock' audio context
+            if (ALL_EXPLOSION_SOUND_PATHS.length > 0) {
+                // Temporarily create an audio object for any sound path to trigger user gesture
+                const tempAudio = new Audio(ALL_EXPLOSION_SOUND_PATHS[0]);
+                tempAudio.volume = 0; // Play silently
+                tempAudio.play().then(() => {
+                    tempAudio.pause(); // Stop immediately after 'unlocking'
+                    tempAudio.currentTime = 0;
+                    audioInitialized = true;
+                }).catch(e => {
+                    console.warn("Audio initialization failed:", e.message);
+                });
+            } else {
+                audioInitialized = true; // No sounds to initialize, but mark as ready
+            }
+        }
+    }
+
+    function touchStarted() {
+        mousePressed();
+        return false;
+    }
+
+    function windowResized() {
+        resizeCanvas(windowWidth, windowHeight);
+        initializeParticles();
+    }
+
+    function draw() {
+      background(230, 20, 20, config.backgroundAlpha);
+      const isInteracting = mouseIsPressed || touches.length > 0;
+
+      for (let i = 0; i < config.numParticles; i++) {
+        posX[i] += velX[i]; posY[i] += velY[i];
+        if (posX[i] < 0) posX[i] += width; if (posX[i] > width) posX[i] -= width;
+        if (posY[i] < 0) posY[i] += height; if (posY[i] > height) posY[i] -= height;
+        r[i] += (baseR[i] - r[i]) * 0.1;
+
+        if (isInteracting) {
+          const d = dist(posX[i], posY[i], mouseX, mouseY);
+          if (d < config.repulsionRadius) {
+            let dirX = posX[i] - mouseX, dirY = posY[i] - mouseY;
+            const mag = sqrt(dirX * dirX + dirY * dirY);
+            if (mag > 0) { dirX /= mag; dirY /= mag; }
+            const str = map(d, 0, config.repulsionRadius, config.repulsionStrength, 0.1);
+            velX[i] += dirX * str; velY[i] += dirY * str;
+            const velMag = sqrt(velX[i]*velX[i] + velY[i]*velY[i]);
+            if (velMag > 4) { velX[i]=(velX[i]/velMag)*4; velY[i]=(velY[i]/velMag)*4; }
+            if (d < r[i] + 8 && random() < config.explosionChance) {
+              // Pass the particle's hue, saturation, and brightness to the explode function
+              explode(posX[i], posY[i], hue[i], sat[i], bri[i]);
+              r[i] = baseR[i]*3;
+              const angle = random(TWO_PI); velX[i]+=cos(angle)*1.5; velY[i]+=sin(angle)*1.5;
+            }
+          } else if (d < config.attractionRadius) {
+            let dirX = mouseX - posX[i], dirY = mouseY - posY[i];
+            const mag = sqrt(dirX * dirX + dirY * dirY);
+            if (mag > 0) { dirX /= mag; dirY /= mag; }
+            velX[i] += dirX * 0.12; velY[i] += dirY * 0.12;
+            const velMag = sqrt(velX[i]*velX[i] + velY[i]*velY[i]);
+            if (velMag > 2.5) { velX[i]=(velX[i]/velMag)*2.5; velY[i]=(velY[i]/velMag)*2.5; }
+          }
+        }
+
+        const angle = random(TWO_PI);
+        velX[i] += cos(angle) * config.ambientDrift; velY[i] += sin(angle) * config.ambientDrift;
+        velX[i] *= config.particleFriction; velY[i] *= config.particleFriction;
+
+        fill(hue[i], sat[i], bri[i], 7);
+        for (let k = 5; k >= 2; k--) { ellipse(posX[i], posY[i], r[i] * k); }
+        fill(hue[i], sat[i], bri[i], 85);
+        ellipse(posX[i], posY[i], r[i] * 2);
+      }
+
+      for (let i = explosionParticles.length - 1; i >= 0; i--) {
+        explosionParticles[i].update(); explosionParticles[i].display();
+        if (explosionParticles[i].life <= 0) explosionParticles.splice(i, 1);
+      }
+    }
+
+    function explode(x, y, h, s, b){ // Added s and b parameters for saturation and brightness
+        let c=int(random(14,23));
+        for(let i=0;i<c;i++){
+            // Use the particle's original hue for spawned particles, but allow some variation
+            let a=map(i,0,c,0,TWO_PI)+random(-.2,.2),s_exp=random(2.8,5),hu_exp=(h+random(-36,36)+360)%360;
+            explosionParticles.push(new ExplosionParticle(x,y,s_exp*cos(a),s_exp*sin(a),hu_exp))
+        }
+
+        // --- NEW: Play a specific explosion sound based on dominant RGB color ---
+        if (audioInitialized && ALL_EXPLOSION_SOUND_PATHS.length > 0) {
+            // Stop any currently playing explosion sound to ensure only one plays at a time
+            if (currentPlayingAudio && !currentPlayingAudio.paused) {
+                currentPlayingAudio.pause();
+                currentPlayingAudio.currentTime = 0;
+            }
+
+            let soundPathToPlay;
+
+            // Create a p5.Color object from the particle's HSB values.
+            // p5.js automatically handles conversion to RGB when red(), green(), blue() are called on it.
+            let particleP5Color = color(h, s, b);
+
+            let rVal = red(particleP5Color); // Get red component (0-255)
+            let gVal = green(particleP5Color); // Get green component (0-255)
+            let bVal = blue(particleP5Color); // Get blue component (0-255)
+
+            // Determine dominant color component
+            // This logic handles primary RGB colors, and for mixed colors (like yellow, magenta, cyan)
+            // or grays, it prioritizes based on the order: Red > Green > Blue
+            if (rVal >= gVal && rVal >= bVal) {
+                soundPathToPlay = EXPLOSION_SOUND_RED;
+            } else if (gVal >= rVal && gVal >= bVal) {
+                soundPathToPlay = EXPLOSION_SOUND_GREEN;
+            } else { // bVal must be the highest or equal to one of the others which wasn't picked
+                soundPathToPlay = EXPLOSION_SOUND_BLUE;
+            }
+
+            // Create a new Audio object for this specific sound
+            const soundToPlay = new Audio(soundPathToPlay);
+            soundToPlay.volume = 0.5; // Adjust volume as needed (0.0 to 1.0)
+            soundToPlay.preload = 'auto'; // Suggest to browser to preload
+
+            // Play the sound
+            soundToPlay.play().then(() => {
+                // Success
+            }).catch(e => {
+                // This catch handles cases where play() might fail (e.g., still blocked by autoplay policy)
+                // or if the sound is already playing and cannot be re-triggered without a brief pause.
+                // console.log(`Audio play prevented or failed for ${soundPathToPlay}:`, e.message); // Uncomment for debugging
+            });
+
+            currentPlayingAudio = soundToPlay; // Store reference to the currently playing sound
+        }
+    }
+    class ExplosionParticle{constructor(x,y,dx,dy,h){this.pos=createVector(x,y);this.vel=createVector(dx,dy).add(p5.Vector.random2D().mult(0.5));this.r=random(5,11);this.hue=h;this.sat=random(75,100);this.bri=random(90,100);this.life=35+random(7,22)}update(){this.pos.add(this.vel);this.vel.mult(0.94);this.life-=1;this.r*=.95}display(){fill(this.hue,this.sat,this.bri,map(this.life,0,55,0,90));ellipse(this.pos.x,this.pos.y,max(0,this.r*2))}}
+    </script>
+</body>
+</html>
