@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Interactive Particle Field</title>
+    <title>Persistent Interactive Particle Field</title>
     <!-- p5.js Library from a CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
 
@@ -47,7 +47,16 @@
             font-size: 14px;
             font-weight: 500;
         }
-        .control-group input[type="range"] { width: 100%; cursor: pointer; }
+        .control-group input[type="range"],
+        .control-group select { /* NEW: Style the select dropdown */
+             width: 100%;
+             cursor: pointer;
+             background-color: rgba(0,0,0,0.3);
+             color: #f0f0f0;
+             border: 1px solid rgba(255,255,255,0.2);
+             padding: 5px;
+             border-radius: 4px;
+        }
         .control-group span {
             font-size: 12px;
             color: #ccc;
@@ -77,7 +86,13 @@
 
     <!-- UI Panel for Customization -->
     <div id="controls-container">
-        <!-- Sliders remain the same -->
+        <!-- NEW: Theme Selector Dropdown -->
+        <div class="control-group">
+            <label for="themeSelector">Color Theme</label>
+            <select id="themeSelector"></select>
+        </div>
+        
+        <!-- Existing Sliders -->
         <div class="control-group"><label for="numParticlesSlider">Particle Count <span id="numParticlesValue"></span></label><input type="range" id="numParticlesSlider" min="20" max="600" step="5"></div>
         <div class="control-group"><label for="particleSizeSlider">Particle Size <span id="particleSizeValue"></span></label><input type="range" id="particleSizeSlider" min="2" max="30" step="1"></div>
         <div class="control-group"><label for="fadeSlider">Background Fade <span id="fadeValue"></span></label><input type="range" id="fadeSlider" min="1" max="50" step="1"></div>
@@ -97,8 +112,43 @@
     <script>
     const CONFIG_STORAGE_KEY = 'particleFieldConfig';
 
+    // --- NEW: Define Color Themes ---
+    const THEMES = [
+        {
+            name: "Nebula", // The original full-spectrum
+            background: { h: 230, s: 20, b: 10 },
+            particleHue: { min: 0, max: 360 } // Full range
+        },
+        {
+            name: "Oceanic",
+            background: { h: 220, s: 40, b: 8 },
+            particleHue: { min: 170, max: 240 } // Blues and Cyans
+        },
+        {
+            name: "Inferno",
+            background: { h: 25, s: 50, b: 5 },
+            // This range wraps around 360/0 for reds
+            particleHue: { min: 340, max: 50 } // Reds, Oranges, Yellows
+        },
+        {
+            name: "Starlight",
+            background: { h: 240, s: 10, b: 4 },
+            // Bright, desaturated particles
+            particleHue: { min: 40, max: 60 },
+            particleSat: { min: 5, max: 25 },
+            particleBri: { min: 95, max: 100 }
+        },
+        {
+            name: "Cyberpunk",
+            background: { h: 260, s: 30, b: 12 },
+            // Two distinct ranges for Pinks/Magentas and Cyans
+            particleHue: [ {min: 280, max: 330}, {min: 160, max: 190} ]
+        }
+    ];
+
     // Default configuration. This will be overwritten by loaded settings.
     let config = {
+        theme: "Nebula", // NEW: Add theme to config
         numParticles: 1000,
         maxParticleSize: 18,
         backgroundAlpha: 12,
@@ -115,42 +165,57 @@
     let explosionParticles = [];
     let controlsContainer;
 
-    // --- NEW: Audio files for different dominant RGB color explosions ---
-    // Make sure these files (explosion_red.mp3, explosion_green.mp3, explosion_blue.mp3)
-    // are located in the same directory as this HTML file.
     const EXPLOSION_SOUND_RED = 'explosion_red.mp3';
     const EXPLOSION_SOUND_GREEN = 'explosion_green.mp3';
     const EXPLOSION_SOUND_BLUE = 'explosion_blue.mp3';
-
-    // A list of all sound paths, used for initial audio context unlock
-    const ALL_EXPLOSION_SOUND_PATHS = [
-        EXPLOSION_SOUND_RED,
-        EXPLOSION_SOUND_GREEN,
-        EXPLOSION_SOUND_BLUE
-    ];
-
-    let audioInitialized = false;     // Flag to track if user interaction has enabled audio
-    let currentPlayingAudio = null; // Reference to the currently playing Audio object
+    const ALL_EXPLOSION_SOUND_PATHS = [EXPLOSION_SOUND_RED, EXPLOSION_SOUND_GREEN, EXPLOSION_SOUND_BLUE];
+    let audioInitialized = false;
+    let currentPlayingAudio = null;
 
     // --- Core Save/Load Functions ---
-
-    function saveConfig() {
-        localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
-    }
-
+    function saveConfig() { localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config)); }
     function loadConfig() {
         const savedConfigJSON = localStorage.getItem(CONFIG_STORAGE_KEY);
         if (savedConfigJSON) {
             try {
                 const savedConfig = JSON.parse(savedConfigJSON);
                 config = { ...config, ...savedConfig };
-            } catch (e) {
-                console.error("Error parsing saved config:", e);
+            } catch (e) { console.error("Error parsing saved config:", e); }
+        }
+    }
+    
+    // --- NEW: Helper function to get the current theme object ---
+    function getCurrentTheme() {
+        const theme = THEMES.find(t => t.name === config.theme);
+        return theme || THEMES[0]; // Fallback to the first theme if not found
+    }
+
+    // --- NEW: Helper function to get a random hue based on the theme's rules ---
+    function getRandomHueFromTheme(theme) {
+        if (Array.isArray(theme.particleHue)) {
+            // Handle multiple hue ranges (like Cyberpunk)
+            const range = random(theme.particleHue);
+            return random(range.min, range.max);
+        } else {
+            // Handle single hue range
+            const { min, max } = theme.particleHue;
+            if (min > max) { // Wraps around 360 (e.g., min=340, max=50)
+                const range1 = 360 - min;
+                const totalRange = range1 + max;
+                if (random(totalRange) < range1) {
+                    return random(min, 360);
+                } else {
+                    return random(0, max);
+                }
+            } else { // Normal range
+                return random(min, max);
             }
         }
     }
 
+    // --- MODIFIED: initializeParticles uses the theme ---
     function initializeParticles() {
+      const theme = getCurrentTheme();
       posX = [], posY = [], velX = [], velY = [], baseR = [], r = [], hue = [], sat = [], bri = [];
       for (let i = 0; i < config.numParticles; i++) {
         posX[i] = random(width); posY[i] = random(height);
@@ -158,24 +223,24 @@
         const speed = random(0.2, 0.6);
         velX[i] = cos(angle) * speed; velY[i] = sin(angle) * speed;
         baseR[i] = random(config.maxParticleSize * 0.4, config.maxParticleSize);
-        hue[i] = random(360); // Hue is 0-360
-        sat[i] = random(60, 100);
-        bri[i] = random(80, 100);
+        
+        // Use theme to set particle colors
+        hue[i] = getRandomHueFromTheme(theme);
+        sat[i] = random(theme.particleSat?.min ?? 60, theme.particleSat?.max ?? 100);
+        bri[i] = random(theme.particleBri?.min ?? 80, theme.particleBri?.max ?? 100);
+        
         r[i] = baseR[i];
       }
     }
 
     function setup() {
       createCanvas(windowWidth, windowHeight);
-      colorMode(HSB, 360, 100, 100, 100); // Set color mode to HSB
+      colorMode(HSB, 360, 100, 100, 100);
       noStroke();
-
       loadConfig();
-
       controlsContainer = document.getElementById('controls-container');
       setupControls();
       initializeParticles();
-
       window.addEventListener('keydown', (e) => {
           if (e.shiftKey && e.ctrlKey && (e.key === 'R' || e.key === 'r')) {
               e.preventDefault();
@@ -184,35 +249,41 @@
       });
     }
 
+    // --- MODIFIED: setupControls now populates and handles the theme selector ---
     function setupControls() {
+        // --- Theme Selector Setup ---
+        const themeSelector = document.getElementById('themeSelector');
+        THEMES.forEach(theme => {
+            const option = document.createElement('option');
+            option.value = theme.name;
+            option.textContent = theme.name;
+            themeSelector.appendChild(option);
+        });
+        themeSelector.value = config.theme; // Set initial value from config
+        themeSelector.addEventListener('change', (e) => {
+            config.theme = e.target.value;
+            saveConfig();
+            initializeParticles(); // Re-create particles with new colors
+        });
+
+        // --- Existing Slider Setup ---
         const createSlider = (id, configKey, displayFn) => {
             const slider = document.getElementById(id + 'Slider');
             const valueSpan = document.getElementById(id + 'Value');
-
             slider.value = (configKey === 'explosionChance') ? config[configKey] * 100 : config[configKey];
-
             const update = () => {
                 let value = parseFloat(slider.value);
-                if (configKey === 'explosionChance') {
-                    config[configKey] = value / 100.0;
-                } else {
-                    config[configKey] = value;
-                }
-
+                config[configKey] = (configKey === 'explosionChance') ? value / 100.0 : value;
                 valueSpan.textContent = displayFn ? displayFn(value) : value;
                 saveConfig();
             };
-
             slider.addEventListener('input', update);
             update();
         };
-
         createSlider('numParticles', 'numParticles');
         document.getElementById('numParticlesSlider').addEventListener('change', () => initializeParticles());
-
         createSlider('particleSize', 'maxParticleSize');
         document.getElementById('particleSizeSlider').addEventListener('change', () => initializeParticles());
-
         createSlider('fade', 'backgroundAlpha');
         createSlider('drift', 'ambientDrift', v => v.toFixed(2));
         createSlider('friction', 'particleFriction', v => v.toFixed(3));
@@ -220,79 +291,28 @@
         createSlider('repelStrength', 'repulsionStrength', v => v.toFixed(1));
         createSlider('attractRadius', 'attractionRadius');
         createSlider('explosionChance', 'explosionChance', v => `${v}%`);
-
-        // --- CHANGED: Added mobile-friendly event listeners ---
+        
+        // --- Button Setup (unchanged mobile-friendly version) ---
         const toggleBtn = document.getElementById('toggle-ui-btn');
         const resetBtn = document.getElementById('reset-btn');
-
-        const toggleAction = (e) => {
-            e.preventDefault(); // Prevent double actions (e.g., from a subsequent 'click' event)
-            controlsContainer.classList.toggle('hidden');
-            audioInitialized = true;
-        };
-        
-        const resetAction = (e) => {
-            e.preventDefault();
-            if (confirm("Are you sure you want to reset all settings to their defaults?")) {
-                localStorage.removeItem(CONFIG_STORAGE_KEY);
-                location.reload();
-            }
-            audioInitialized = true;
-        };
-
+        const toggleAction = (e) => { e.preventDefault(); controlsContainer.classList.toggle('hidden'); audioInitialized = true; };
+        const resetAction = (e) => { e.preventDefault(); if (confirm("Are you sure?")) { localStorage.removeItem(CONFIG_STORAGE_KEY); location.reload(); } audioInitialized = true; };
         toggleBtn.addEventListener('click', toggleAction);
-        toggleBtn.addEventListener('touchend', toggleAction); // Respond to touch release
-
+        toggleBtn.addEventListener('touchend', toggleAction);
         resetBtn.addEventListener('click', resetAction);
-        resetBtn.addEventListener('touchend', resetAction); // Respond to touch release
+        resetBtn.addEventListener('touchend', resetAction);
     }
 
-    function initializeAudio() {
-        if (audioInitialized) return;
-        
-        if (ALL_EXPLOSION_SOUND_PATHS.length > 0) {
-            const tempAudio = new Audio(ALL_EXPLOSION_SOUND_PATHS[0]);
-            tempAudio.volume = 0;
-            tempAudio.play().then(() => {
-                tempAudio.pause();
-                tempAudio.currentTime = 0;
-                audioInitialized = true;
-                console.log("Audio context initialized successfully.");
-            }).catch(e => {
-                console.warn("Audio initialization requires user interaction:", e.message);
-            });
-        } else {
-            audioInitialized = true;
-        }
-    }
-    
-    function mousePressed() {
-        initializeAudio();
-    }
-    
-    // --- CHANGED: Modified touchStarted to handle UI interaction ---
-    function touchStarted(event) {
-        // If the touch is on the UI panel, let the browser handle it.
-        // The .contains() method checks if the event target (the element that was touched)
-        // is a child of our controls container.
-        if (controlsContainer && controlsContainer.contains(event.target)) {
-            return true; // Allow default browser action (interacting with sliders/buttons)
-        }
+    function initializeAudio() { if (audioInitialized) return; if (ALL_EXPLOSION_SOUND_PATHS.length > 0) { const tempAudio = new Audio(ALL_EXPLOSION_SOUND_PATHS[0]); tempAudio.volume = 0; tempAudio.play().then(() => { tempAudio.pause(); tempAudio.currentTime = 0; audioInitialized = true; }).catch(e => {}); } else { audioInitialized = true; } }
+    function mousePressed() { initializeAudio(); }
+    function touchStarted(event) { if (controlsContainer && controlsContainer.contains(event.target)) { return true; } initializeAudio(); return false; }
+    function windowResized() { resizeCanvas(windowWidth, windowHeight); initializeParticles(); }
 
-        // Otherwise, handle it as a p5.js canvas interaction
-        initializeAudio();
-        
-        // Prevent the browser from doing default actions like scrolling the page.
-        return false;
-    }
-
-    function windowResized() {
-        resizeCanvas(windowWidth, windowHeight);
-        initializeParticles();
-    }
-
+    // --- MODIFIED: draw function uses the theme for the background ---
     function draw() {
-      background(230, 20, 20, config.backgroundAlpha);
+      const theme = getCurrentTheme();
+      background(theme.background.h, theme.background.s, theme.background.b, config.backgroundAlpha);
+
       const isInteracting = mouseIsPressed || touches.length > 0;
 
       for (let i = 0; i < config.numParticles; i++) {
@@ -302,19 +322,9 @@
         r[i] += (baseR[i] - r[i]) * 0.1;
 
         if (isInteracting) {
-          // --- ADDED: Check if interaction is over the UI to prevent canvas interaction ---
           let interactionBlocked = false;
-          if (touches.length > 0) {
-              // On mobile, check if the touch is over the controls
-              if (controlsContainer && controlsContainer.contains(document.elementFromPoint(touches[0].x, touches[0].y))) {
-                  interactionBlocked = true;
-              }
-          } else {
-              // On desktop, check if the mouse is over the controls
-              if (controlsContainer && controlsContainer.contains(document.elementFromPoint(mouseX, mouseY))) {
-                  interactionBlocked = true;
-              }
-          }
+          if (touches.length > 0) { if (controlsContainer && controlsContainer.contains(document.elementFromPoint(touches[0].x, touches[0].y))) { interactionBlocked = true; }
+          } else { if (controlsContainer && controlsContainer.contains(document.elementFromPoint(mouseX, mouseY))) { interactionBlocked = true; } }
 
           if (!interactionBlocked) {
             const d = dist(posX[i], posY[i], mouseX, mouseY);
@@ -341,52 +351,22 @@
             }
           }
         }
-
         const angle = random(TWO_PI);
         velX[i] += cos(angle) * config.ambientDrift; velY[i] += sin(angle) * config.ambientDrift;
         velX[i] *= config.particleFriction; velY[i] *= config.particleFriction;
-
         fill(hue[i], sat[i], bri[i], 7);
         for (let k = 5; k >= 2; k--) { ellipse(posX[i], posY[i], r[i] * k); }
         fill(hue[i], sat[i], bri[i], 85);
         ellipse(posX[i], posY[i], r[i] * 2);
       }
-
       for (let i = explosionParticles.length - 1; i >= 0; i--) {
         explosionParticles[i].update(); explosionParticles[i].display();
         if (explosionParticles[i].life <= 0) explosionParticles.splice(i, 1);
       }
     }
-
-    function explode(x, y, h, s, b){ // Added s and b parameters for saturation and brightness
-        let c=int(random(14,23));
-        for(let i=0;i<c;i++){
-            let a=map(i,0,c,0,TWO_PI)+random(-.2,.2),s_exp=random(2.8,5),hu_exp=(h+random(-36,36)+360)%360;
-            explosionParticles.push(new ExplosionParticle(x,y,s_exp*cos(a),s_exp*sin(a),hu_exp))
-        }
-
-        if (audioInitialized && ALL_EXPLOSION_SOUND_PATHS.length > 0) {
-            if (currentPlayingAudio && !currentPlayingAudio.paused) {
-                currentPlayingAudio.pause();
-                currentPlayingAudio.currentTime = 0;
-            }
-
-            let soundPathToPlay;
-            let particleP5Color = color(h, s, b);
-            let rVal = red(particleP5Color), gVal = green(particleP5Color), bVal = blue(particleP5Color);
-
-            if (rVal >= gVal && rVal >= bVal) { soundPathToPlay = EXPLOSION_SOUND_RED;
-            } else if (gVal >= rVal && gVal >= bVal) { soundPathToPlay = EXPLOSION_SOUND_GREEN;
-            } else { soundPathToPlay = EXPLOSION_SOUND_BLUE; }
-
-            const soundToPlay = new Audio(soundPathToPlay);
-            soundToPlay.volume = 0.5;
-            soundToPlay.preload = 'auto';
-            soundToPlay.play().catch(e => {});
-
-            currentPlayingAudio = soundToPlay;
-        }
-    }
+    
+    // Unchanged functions
+    function explode(x, y, h, s, b){ let c=int(random(14,23)); for(let i=0;i<c;i++){ let a=map(i,0,c,0,TWO_PI)+random(-.2,.2),s_exp=random(2.8,5),hu_exp=(h+random(-36,36)+360)%360; explosionParticles.push(new ExplosionParticle(x,y,s_exp*cos(a),s_exp*sin(a),hu_exp)) } if (audioInitialized && ALL_EXPLOSION_SOUND_PATHS.length > 0) { if (currentPlayingAudio && !currentPlayingAudio.paused) { currentPlayingAudio.pause(); currentPlayingAudio.currentTime = 0; } let soundPathToPlay; let particleP5Color = color(h, s, b); let rVal = red(particleP5Color), gVal = green(particleP5Color), bVal = blue(particleP5Color); if (rVal >= gVal && rVal >= bVal) { soundPathToPlay = EXPLOSION_SOUND_RED; } else if (gVal >= rVal && gVal >= bVal) { soundPathToPlay = EXPLOSION_SOUND_GREEN; } else { soundPathToPlay = EXPLOSION_SOUND_BLUE; } const soundToPlay = new Audio(soundPathToPlay); soundToPlay.volume = 0.5; soundToPlay.preload = 'auto'; soundToPlay.play().catch(e => {}); currentPlayingAudio = soundToPlay; } }
     class ExplosionParticle{constructor(x,y,dx,dy,h){this.pos=createVector(x,y);this.vel=createVector(dx,dy).add(p5.Vector.random2D().mult(0.5));this.r=random(5,11);this.hue=h;this.sat=random(75,100);this.bri=random(90,100);this.life=35+random(7,22)}update(){this.pos.add(this.vel);this.vel.mult(0.94);this.life-=1;this.r*=.95}display(){fill(this.hue,this.sat,this.bri,map(this.life,0,55,0,90));ellipse(this.pos.x,this.pos.y,max(0,this.r*2))}}
     </script>
 </body>
